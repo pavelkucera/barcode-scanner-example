@@ -14,40 +14,283 @@
         body {
             background: #fff;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
             min-height: 100vh;
+            font-family: system-ui, sans-serif;
+            padding: 1rem;
+            gap: 1rem;
+        }
+
+        #container {
+            width: 100%;
+            max-width: 800px;
         }
 
         video {
-            max-width: 100%;
-            max-height: 100vh;
+            width: 100%;
+            display: block;
             transform: scaleX(-1);
         }
 
         .error {
-            font-family: system-ui, sans-serif;
             color: #c00;
             font-size: 1.2rem;
             text-align: center;
             padding: 2rem;
         }
+
+        .api-error {
+            background: #fff3f3;
+            border: 1px solid #c00;
+            color: #c00;
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+
+        #results {
+            width: 100%;
+            max-width: 800px;
+        }
+
+        #results h2 {
+            margin-bottom: 0.5rem;
+        }
+
+        #barcode-log {
+            list-style: none;
+        }
+
+        .barcode-entry {
+            padding: 0.5rem;
+            border-bottom: 1px solid #eee;
+            font-size: 0.9rem;
+        }
+
+        .barcode-entry strong {
+            color: #333;
+        }
+
+        .barcode-entry code {
+            background: #f5f5f5;
+            padding: 0.1em 0.4em;
+            border-radius: 3px;
+        }
+
+        .barcode-entry time {
+            color: #999;
+            font-size: 0.8rem;
+        }
+
+        #debug {
+            width: 100%;
+            max-width: 800px;
+        }
+
+        #debug h2 {
+            margin-bottom: 0.5rem;
+        }
+
+        #debug-output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 1rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            overflow-x: auto;
+            white-space: pre;
+        }
     </style>
 </head>
 <body>
-    <video id="video" autoplay playsinline></video>
+    <div id="container">
+        <video id="video" autoplay playsinline></video>
+    </div>
+
+    <section id="results">
+        <h2>Detected Barcodes</h2>
+        <ul id="barcode-log"></ul>
+    </section>
+
+    <section id="debug">
+        <h2>Debug</h2>
+        <pre id="debug-output">Initializing...</pre>
+    </section>
+
     <script>
-        navigator.mediaDevices.getUserMedia({ video: true })
-            .then(stream => {
-                document.getElementById('video').srcObject = stream;
-            })
-            .catch(() => {
-                document.getElementById('video').remove();
-                const msg = document.createElement('p');
-                msg.className = 'error';
-                msg.textContent = 'Camera access denied. Please allow camera access and reload the page.';
-                document.body.appendChild(msg);
+        const video = document.getElementById('video');
+        const barcodeLog = document.getElementById('barcode-log');
+        const debugOutput = document.getElementById('debug-output');
+
+        const state = {
+            apiAvailable: false,
+            supportedFormats: [],
+            scanning: false,
+            totalScans: 0,
+            totalDetections: 0,
+            scanStartTime: null,
+            lastDetectDuration: 0,
+            totalDetectDuration: 0,
+            lastDetection: null,
+            errors: [],
+        };
+
+        function addError(err) {
+            state.errors.push({ time: new Date(), message: String(err) });
+            if (state.errors.length > 5) state.errors.shift();
+        }
+
+        function updateDebug() {
+            const elapsed = state.scanStartTime
+                ? (Date.now() - state.scanStartTime) / 1000
+                : 0;
+            const scanRate = elapsed > 0
+                ? (state.totalScans / elapsed).toFixed(2)
+                : '0.00';
+            const avgDuration = state.totalScans > 0
+                ? (state.totalDetectDuration / state.totalScans).toFixed(1)
+                : '0';
+
+            let text = '';
+            text += `API available:      ${state.apiAvailable}\n`;
+            text += `Supported formats:  ${state.supportedFormats.join(', ') || '(none)'}\n`;
+            text += `\n`;
+            text += `Total scans:        ${state.totalScans}\n`;
+            text += `Total detections:   ${state.totalDetections}\n`;
+            text += `Scan interval:      250ms\n`;
+            text += `Effective rate:     ${scanRate} scans/sec\n`;
+            text += `Avg detect() time:  ${avgDuration}ms\n`;
+            text += `Last detect() time: ${state.lastDetectDuration.toFixed(1)}ms\n`;
+
+            if (state.lastDetection) {
+                const d = state.lastDetection;
+                text += `\n--- Last Detection ---\n`;
+                text += `Format:       ${d.format}\n`;
+                text += `Value:        ${d.rawValue}\n`;
+                text += `BoundingBox:  x=${d.boundingBox.x.toFixed(0)} y=${d.boundingBox.y.toFixed(0)} w=${d.boundingBox.width.toFixed(0)} h=${d.boundingBox.height.toFixed(0)}\n`;
+                text += `CornerPoints: ${d.cornerPoints.map(p => `(${p.x.toFixed(0)},${p.y.toFixed(0)})`).join(' ')}\n`;
+                text += `Detected at:  ${d.time}\n`;
+            }
+
+            if (state.errors.length > 0) {
+                text += `\n--- Recent Errors (${state.errors.length}) ---\n`;
+                for (const e of state.errors) {
+                    text += `[${e.time.toLocaleTimeString()}] ${e.message}\n`;
+                }
+            }
+
+            debugOutput.textContent = text;
+        }
+
+        function addBarcodeEntry(barcode) {
+            const li = document.createElement('li');
+            li.className = 'barcode-entry';
+            const now = new Date().toLocaleTimeString();
+            li.innerHTML = `<strong>${barcode.format}</strong> <code>${barcode.rawValue}</code> <time>${now}</time>`;
+            barcodeLog.prepend(li);
+
+            while (barcodeLog.children.length > 100) {
+                barcodeLog.lastElementChild.remove();
+            }
+        }
+
+        async function init() {
+            // Feature detection
+            if (!('BarcodeDetector' in window)) {
+                state.apiAvailable = false;
+                updateDebug();
+                const err = document.createElement('div');
+                err.className = 'api-error';
+                err.textContent = 'BarcodeDetector API is not available in this browser. Use Chrome on macOS or Android.';
+                document.getElementById('container').prepend(err);
+                return;
+            }
+
+            state.apiAvailable = true;
+
+            // Query supported formats
+            try {
+                state.supportedFormats = await BarcodeDetector.getSupportedFormats();
+            } catch (e) {
+                addError('getSupportedFormats: ' + e);
+            }
+
+            updateDebug();
+
+            // Camera setup — try rear camera first, fall back to any
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' },
+                });
+            } catch {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                } catch (e) {
+                    video.remove();
+                    const msg = document.createElement('p');
+                    msg.className = 'error';
+                    msg.textContent = 'Camera access denied. Please allow camera access and reload the page.';
+                    document.getElementById('container').appendChild(msg);
+                    addError('getUserMedia: ' + e);
+                    updateDebug();
+                    return;
+                }
+            }
+
+            video.srcObject = stream;
+
+            // Create detector
+            const detector = new BarcodeDetector();
+
+            // Wait for video to be ready
+            await new Promise(resolve => {
+                video.addEventListener('loadeddata', resolve, { once: true });
             });
+
+            // Scan loop
+            state.scanStartTime = Date.now();
+
+            setInterval(async () => {
+                if (state.scanning) return;
+                if (video.readyState < 2) return;
+
+                state.scanning = true;
+                const t0 = performance.now();
+
+                try {
+                    const barcodes = await detector.detect(video);
+                    const duration = performance.now() - t0;
+
+                    state.totalScans++;
+                    state.lastDetectDuration = duration;
+                    state.totalDetectDuration += duration;
+
+                    if (barcodes.length > 0) {
+                        state.totalDetections++;
+                        for (const barcode of barcodes) {
+                            state.lastDetection = {
+                                format: barcode.format,
+                                rawValue: barcode.rawValue,
+                                boundingBox: barcode.boundingBox,
+                                cornerPoints: barcode.cornerPoints,
+                                time: new Date().toLocaleTimeString(),
+                            };
+                            addBarcodeEntry(barcode);
+                        }
+                    }
+                } catch (e) {
+                    addError('detect: ' + e);
+                }
+
+                state.scanning = false;
+                updateDebug();
+            }, 250);
+        }
+
+        init();
     </script>
 </body>
 </html>
