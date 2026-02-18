@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barcode Scanner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        video {
+            max-width: 100%;
+            max-height: 100vh;
+        }
+
+        .error {
+            font-family: system-ui, sans-serif;
+            color: #c00;
+            font-size: 1.2rem;
+            text-align: center;
+            padding: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <video id="video" autoplay playsinline></video>
+    <script>
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                document.getElementById('video').srcObject = stream;
+            })
+            .catch(() => {
+                document.getElementById('video').remove();
+                const msg = document.createElement('p');
+                msg.className = 'error';
+                msg.textContent = 'Camera access denied. Please allow camera access and reload the page.';
+                document.body.appendChild(msg);
+            });
+    </script>
+</body>
+</html>
